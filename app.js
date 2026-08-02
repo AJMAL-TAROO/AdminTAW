@@ -1,17 +1,7 @@
-import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-app.js";
-import {
-  getDatabase,
-  ref,
-  onValue,
-  get,
-  set,
-  update,
-  remove,
-  runTransaction,
-} from "https://www.gstatic.com/firebasejs/10.12.5/firebase-database.js";
-
-const app = initializeApp(window.TAW_FIREBASE_CONFIG);
-const db = getDatabase(app);
+const firebaseConfig = window.TAW_FIREBASE_CONFIG || {};
+const databaseURL = firebaseConfig.databaseURL?.replace(/\/$/, "");
+let lastDatabaseJson = "";
+let pollTimer = null;
 
 const state = {
   data: null,
@@ -107,12 +97,86 @@ window.addEventListener("error", (event) => {
   showAlert(event.message, "error");
 });
 
-function pathRef(path = "") {
-  return ref(db, cleanPath(path));
-}
-
 function cleanPath(path = "") {
   return String(path).split("/").filter(Boolean).join("/");
+}
+
+function databaseUrl(path = "") {
+  if (!databaseURL) {
+    throw new Error("Missing databaseURL in firebase-config.js.");
+  }
+  const normalized = cleanPath(path)
+    .split("/")
+    .filter(Boolean)
+    .map(encodeURIComponent)
+    .join("/");
+  return `${databaseURL}/${normalized}.json`;
+}
+
+async function firebaseRequest(path = "", options = {}) {
+  const response = await fetch(databaseUrl(path), {
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      ...(options.headers || {}),
+    },
+  });
+
+  if (!response.ok) {
+    const body = await response.text();
+    throw new Error(`Firebase ${options.method || "GET"} failed at /${cleanPath(path)}: ${response.status} ${body}`);
+  }
+
+  return response;
+}
+
+async function dbGet(path = "", options = {}) {
+  const response = await firebaseRequest(path, {
+    method: "GET",
+    headers: options.headers || {},
+  });
+  const text = await response.text();
+  if (!text || text.trim() === "null") return null;
+  const value = JSON.parse(text);
+  return options.withResponse ? { value, response } : value;
+}
+
+async function dbSet(path, value, headers = {}) {
+  await firebaseRequest(path, {
+    method: "PUT",
+    headers,
+    body: JSON.stringify(value),
+  });
+}
+
+async function dbUpdate(path, value) {
+  await firebaseRequest(path, {
+    method: "PATCH",
+    body: JSON.stringify(value),
+  });
+}
+
+async function dbRemove(path) {
+  await firebaseRequest(path, { method: "DELETE" });
+}
+
+async function dbTransaction(path, updater, maxAttempts = 8) {
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    const { value, response } = await dbGet(path, {
+      headers: { "X-Firebase-ETag": "true" },
+      withResponse: true,
+    });
+    const etag = response.headers.get("etag") || "*";
+    const nextValue = updater(value);
+    try {
+      await dbSet(path, nextValue, { "if-match": etag });
+      return nextValue;
+    } catch (error) {
+      if (String(error.message).includes("412")) continue;
+      throw error;
+    }
+  }
+  throw new Error(`Could not update /${cleanPath(path)} after ${maxAttempts} attempts.`);
 }
 
 function pathParts(path = "") {
@@ -184,24 +248,33 @@ function renderAll() {
   renderTree();
 }
 
-onValue(
-  pathRef(),
-  (snapshot) => {
-    state.data = snapshot.val() || {};
-    setConnection(true, "Live Firebase listener active");
-    renderAll();
-  },
-  (error) => {
-    setConnection(false, "Firebase listener failed");
+async function loadDatabase({ silent = false } = {}) {
+  try {
+    const data = await dbGet("");
+    const nextJson = JSON.stringify(data || {});
+    state.data = data || {};
+    setConnection(true, "Live Firebase polling active");
+    if (nextJson !== lastDatabaseJson) {
+      lastDatabaseJson = nextJson;
+      renderAll();
+    }
+    if (!silent) showAlert("Data refreshed.");
+  } catch (error) {
+    setConnection(false, "Firebase connection failed");
     showAlert(error.message, "error");
-  },
-);
+  }
+}
+
+function startPolling() {
+  clearInterval(pollTimer);
+  loadDatabase({ silent: true });
+  pollTimer = setInterval(() => loadDatabase({ silent: true }), 5000);
+}
+
+startPolling();
 
 $("#refreshBtn").addEventListener("click", async () => {
-  const snapshot = await get(pathRef());
-  state.data = snapshot.val() || {};
-  renderAll();
-  showAlert("Data refreshed.");
+  await loadDatabase();
 });
 
 $$(".nav-item").forEach((button) => {
@@ -363,15 +436,14 @@ async function createNewPerson(type) {
     ? { FULL_NAME: "", EMAIL: "", PASSWORD: "", TEL: "", APPROVAL: "pending", VIRTUAL_ROOMS: "", STUDENTS: "" }
     : { FULL_NAME: "", EMAIL: "", PASSWORD: "123456", TEL: "", R_PARTY: "", R_PARTY_TEL: "", VIRTUAL_ROOMS: "" };
 
-  await set(pathRef(`${type}/${state.selectedPersonKey}`), defaults);
+  await dbSet(`${type}/${state.selectedPersonKey}`, defaults);
   showAlert(`${state.selectedPersonKey} created. Fill the form and save.`);
   switchView("people");
 }
 
 async function reserveNumber(counterPath, minimum, prefix) {
   let reservedNumber = minimum;
-  const counter = pathRef(counterPath);
-  await runTransaction(counter, (current) => {
+  await dbTransaction(counterPath, (current) => {
     const parsed = Number.parseInt(current, 10);
     reservedNumber = Number.isFinite(parsed) ? parsed : minimum;
     return reservedNumber + 1;
@@ -401,14 +473,14 @@ async function savePersonForm(event) {
   event.preventDefault();
   const key = state.selectedPersonKey;
   const payload = formPayload(els.personForm);
-  await update(pathRef(`${state.peopleType}/${key}`), payload);
+  await dbUpdate(`${state.peopleType}/${key}`, payload);
   showAlert(`${key} updated.`);
 }
 
 async function deleteSelectedPerson() {
   const key = state.selectedPersonKey;
   if (!key || !confirm(`Delete ${key}? This cannot be undone.`)) return;
-  await remove(pathRef(`${state.peopleType}/${key}`));
+  await dbRemove(`${state.peopleType}/${key}`);
   state.selectedPersonKey = "";
   showAlert(`${key} deleted.`);
 }
@@ -461,9 +533,9 @@ async function createNewClassroom() {
     TEACHER_ADDRESS: "",
     VR_LINK: admin.VR_LINK || "",
   };
-  await set(pathRef(`CLASSROOMS/${key}`), payload);
-  await set(pathRef(`NUMBERS/ID_CLASSROOM_${id}_NOTES/NUMBER`), 1);
-  await set(pathRef(`NUMBERS/ID_CLASSROOM_${id}_HOMEWORK/NUMBER`), 1);
+  await dbSet(`CLASSROOMS/${key}`, payload);
+  await dbSet(`NUMBERS/ID_CLASSROOM_${id}_NOTES/NUMBER`, 1);
+  await dbSet(`NUMBERS/ID_CLASSROOM_${id}_HOMEWORK/NUMBER`, 1);
   state.selectedClassroomKey = key;
   showAlert(`${key} created with note and homework counters.`);
   switchView("classrooms");
@@ -471,7 +543,7 @@ async function createNewClassroom() {
 
 async function reserveClassroomKey() {
   let id = 1000;
-  await runTransaction(pathRef("NUMBERS/CURRENT_ID_CLASSROOM/NUMBER"), (current) => {
+  await dbTransaction("NUMBERS/CURRENT_ID_CLASSROOM/NUMBER", (current) => {
     id = (Number.parseInt(current, 10) || 1000) + 1;
     return id;
   });
@@ -497,7 +569,7 @@ function renderClassroomForm() {
 async function saveClassroomForm(event) {
   event.preventDefault();
   const key = state.selectedClassroomKey;
-  await update(pathRef(`CLASSROOMS/${key}`), formPayload(els.classroomForm));
+  await dbUpdate(`CLASSROOMS/${key}`, formPayload(els.classroomForm));
   showAlert(`${key} updated.`);
 }
 
@@ -506,12 +578,12 @@ async function deleteSelectedClassroom() {
   const classroom = getAtPath(state.data, `CLASSROOMS/${key}`);
   if (!key || !confirm(`Delete ${key}? This will also remove the classroom's notes/homework nodes and counters.`)) return;
   const id = classroom.CLASSROOM_ID;
-  await remove(pathRef(`CLASSROOMS/${key}`));
-  if (classroom.STORAGE_FOLDER) await remove(pathRef(classroom.STORAGE_FOLDER));
+  await dbRemove(`CLASSROOMS/${key}`);
+  if (classroom.STORAGE_FOLDER) await dbRemove(classroom.STORAGE_FOLDER);
   if (id) {
-    await remove(pathRef(`${id}_HOMEWORK`));
-    await remove(pathRef(`NUMBERS/ID_CLASSROOM_${id}_NOTES`));
-    await remove(pathRef(`NUMBERS/ID_CLASSROOM_${id}_HOMEWORK`));
+    await dbRemove(`${id}_HOMEWORK`);
+    await dbRemove(`NUMBERS/ID_CLASSROOM_${id}_NOTES`);
+    await dbRemove(`NUMBERS/ID_CLASSROOM_${id}_HOMEWORK`);
   }
   state.selectedClassroomKey = "";
   showAlert(`${key} deleted.`);
@@ -639,7 +711,7 @@ async function saveAttendance() {
   if (!date || !adminKey || !classroom) return showAlert("Choose a date, admin, and classroom first.", "error");
   const [year, month, day] = date.split("-");
   const path = `ATTENDANCE/${year}/${month}/${day}/${adminKey}/CLASSROOM_${classroom.CLASSROOM_ID}`;
-  await set(pathRef(path), state.attendanceRecords);
+  await dbSet(path, state.attendanceRecords);
   showAlert(`Attendance saved for ${date}.`);
 }
 
@@ -701,14 +773,14 @@ function renderBreadcrumb() {
 async function saveTreeNode() {
   const parsed = parseEditorJson(els.treeEditor.value);
   if (!parsed.ok) return showAlert(`Invalid JSON: ${parsed.error.message}`, "error");
-  await set(pathRef(state.treePath), parsed.value);
+  await dbSet(state.treePath, parsed.value);
   showAlert(`/${cleanPath(state.treePath)} saved.`);
 }
 
 async function deleteTreeNode() {
   if (!state.treePath) return showAlert("The root node cannot be deleted from here.", "error");
   if (!confirm(`Delete /${state.treePath}? This cannot be undone.`)) return;
-  await remove(pathRef(state.treePath));
+  await dbRemove(state.treePath);
   state.treePath = pathParts(state.treePath).slice(0, -1).join("/");
   showAlert("Node deleted.");
 }
@@ -719,7 +791,7 @@ async function addTreeChild() {
   const parsed = parseEditorJson(els.childValueInput.value);
   if (!parsed.ok) return showAlert(`Invalid JSON: ${parsed.error.message}`, "error");
   const nextPath = childPath(state.treePath, key);
-  await set(pathRef(nextPath), parsed.value);
+  await dbSet(nextPath, parsed.value);
   state.treePath = nextPath;
   els.childDialog.close();
   showAlert(`/${nextPath} added.`);
