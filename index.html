@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>TAW Admin Helper</title>
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <header class="app-header">
+      <div>
+        <p class="eyebrow">House of Tutors</p>
+        <h1>TAW Admin Helper</h1>
+      </div>
+      <div class="status-bar">
+        <span id="connectionDot" class="dot"></span>
+        <span id="connectionText">Connecting to Firebase</span>
+        <button id="refreshBtn" class="icon-button" title="Refresh data" type="button">Refresh</button>
+      </div>
+    </header>
+
+    <main class="shell">
+      <aside class="sidebar" aria-label="Main sections">
+        <button class="nav-item active" data-view="overview" type="button">Overview</button>
+        <button class="nav-item" data-view="people" type="button">People</button>
+        <button class="nav-item" data-view="classrooms" type="button">Classrooms</button>
+        <button class="nav-item" data-view="attendance" type="button">Attendance</button>
+        <button class="nav-item" data-view="tree" type="button">Live Tree CRUD</button>
+      </aside>
+
+      <section class="content">
+        <div id="alertHost" class="alert-host" aria-live="polite"></div>
+
+        <section id="overview" class="view active">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">Live database</p>
+              <h2>Dashboard</h2>
+            </div>
+            <input id="globalSearch" class="search-input" type="search" placeholder="Search any Firebase value">
+          </div>
+          <div id="statsGrid" class="stats-grid"></div>
+          <div class="split">
+            <section class="panel">
+              <div class="panel-heading">
+                <h3>Root Nodes</h3>
+                <button class="secondary" id="openTreeRoot" type="button">Manage Tree</button>
+              </div>
+              <div id="rootNodeList" class="node-list"></div>
+            </section>
+            <section class="panel">
+              <div class="panel-heading">
+                <h3>Search Results</h3>
+                <span id="searchCount" class="muted">No search yet</span>
+              </div>
+              <div id="searchResults" class="results-list muted">Type to find names, emails, classroom IDs, notes, feedback, or any new node.</div>
+            </section>
+          </div>
+        </section>
+
+        <section id="people" class="view">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">Admins and students</p>
+              <h2>People</h2>
+            </div>
+            <div class="toolbar">
+              <button id="newAdminBtn" class="secondary" type="button">New Admin</button>
+              <button id="newStudentBtn" type="button">New Student</button>
+            </div>
+          </div>
+          <div class="split">
+            <section class="panel">
+              <div class="panel-heading">
+                <h3>Records</h3>
+                <input id="peopleSearch" class="search-input small" type="search" placeholder="Filter people">
+              </div>
+              <div class="tabs">
+                <button class="tab active" data-people-type="ADMIN" type="button">Admins</button>
+                <button class="tab" data-people-type="STUDENTS" type="button">Students</button>
+              </div>
+              <div id="peopleList" class="record-list"></div>
+            </section>
+            <section class="panel editor-panel">
+              <div class="panel-heading">
+                <h3 id="personEditorTitle">Select a record</h3>
+                <button id="deletePersonBtn" class="danger ghost hidden" type="button">Delete</button>
+              </div>
+              <form id="personForm" class="form-grid"></form>
+            </section>
+          </div>
+        </section>
+
+        <section id="classrooms" class="view">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">Teaching spaces</p>
+              <h2>Classrooms</h2>
+            </div>
+            <button id="newClassroomBtn" type="button">New Classroom</button>
+          </div>
+          <div class="split">
+            <section class="panel">
+              <div class="panel-heading">
+                <h3>Classroom List</h3>
+                <input id="classroomSearch" class="search-input small" type="search" placeholder="Filter classrooms">
+              </div>
+              <div id="classroomList" class="record-list"></div>
+            </section>
+            <section class="panel editor-panel">
+              <div class="panel-heading">
+                <h3 id="classroomEditorTitle">Select a classroom</h3>
+                <button id="deleteClassroomBtn" class="danger ghost hidden" type="button">Delete</button>
+              </div>
+              <form id="classroomForm" class="form-grid"></form>
+            </section>
+          </div>
+        </section>
+
+        <section id="attendance" class="view">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">Daily records</p>
+              <h2>Attendance</h2>
+            </div>
+            <button id="saveAttendanceBtn" type="button">Save Attendance</button>
+          </div>
+          <section class="panel">
+            <div class="attendance-controls">
+              <label>Date<input id="attendanceDate" type="date"></label>
+              <label>Admin<select id="attendanceAdmin"></select></label>
+              <label>Classroom<select id="attendanceClassroom"></select></label>
+            </div>
+            <div id="attendanceList" class="attendance-list muted">Choose a date, admin, and classroom.</div>
+          </section>
+        </section>
+
+        <section id="tree" class="view">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">Adaptive CRUD</p>
+              <h2>Live Tree Manager</h2>
+            </div>
+            <div class="toolbar">
+              <button id="treeAddChildBtn" class="secondary" type="button">Add Child</button>
+              <button id="treeSaveBtn" type="button">Save Node</button>
+              <button id="treeDeleteBtn" class="danger" type="button">Delete Node</button>
+            </div>
+          </div>
+          <div class="tree-layout">
+            <section class="panel tree-panel">
+              <div class="panel-heading">
+                <h3>Paths</h3>
+                <input id="treeFilter" class="search-input small" type="search" placeholder="Filter paths">
+              </div>
+              <div id="breadcrumb" class="breadcrumb"></div>
+              <div id="treeChildren" class="node-list"></div>
+            </section>
+            <section class="panel editor-panel">
+              <div class="panel-heading">
+                <h3 id="treeEditorTitle">/</h3>
+                <span id="treeNodeMeta" class="muted"></span>
+              </div>
+              <textarea id="treeEditor" spellcheck="false"></textarea>
+            </section>
+          </div>
+        </section>
+      </section>
+    </main>
+
+    <dialog id="childDialog">
+      <form method="dialog" class="dialog-card">
+        <h3>Add Child Node</h3>
+        <label>Child key<input id="childKeyInput" placeholder="Example: CLASSROOM_1099"></label>
+        <label>Initial JSON<textarea id="childValueInput" spellcheck="false">{}</textarea></label>
+        <div class="dialog-actions">
+          <button value="cancel" class="secondary" type="submit">Cancel</button>
+          <button id="confirmChildBtn" value="default" type="button">Add</button>
+        </div>
+      </form>
+    </dialog>
+
+    <script src="firebase-config.js"></script>
+    <script type="module" src="app.js"></script>
+  </body>
+</html>
