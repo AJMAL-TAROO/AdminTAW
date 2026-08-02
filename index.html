@@ -25,6 +25,7 @@
         <button class="nav-item" data-view="people" type="button">People</button>
         <button class="nav-item" data-view="classrooms" type="button">Classrooms</button>
         <button class="nav-item" data-view="attendance" type="button">Attendance</button>
+        <button class="nav-item" data-view="relationships" type="button">Relationships</button>
         <button class="nav-item" data-view="tree" type="button">Live Tree CRUD</button>
       </aside>
 
@@ -87,6 +88,7 @@
                 <button id="deletePersonBtn" class="danger ghost hidden" type="button">Delete</button>
               </div>
               <form id="personForm" class="form-grid"></form>
+              <div id="personRelations" class="relation-stack"></div>
             </section>
           </div>
         </section>
@@ -113,6 +115,7 @@
                 <button id="deleteClassroomBtn" class="danger ghost hidden" type="button">Delete</button>
               </div>
               <form id="classroomForm" class="form-grid"></form>
+              <div id="classroomRelations" class="relation-stack"></div>
             </section>
           </div>
         </section>
@@ -133,6 +136,32 @@
             </div>
             <div id="attendanceList" class="attendance-list muted">Choose a date, admin, and classroom.</div>
           </section>
+        </section>
+
+        <section id="relationships" class="view">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">Linked records</p>
+              <h2>Relationships</h2>
+            </div>
+            <input id="relationshipSearch" class="search-input" type="search" placeholder="Search relationships or issues">
+          </div>
+          <div class="split">
+            <section class="panel">
+              <div class="panel-heading">
+                <h3>Data Health</h3>
+                <span id="healthCount" class="muted"></span>
+              </div>
+              <div id="healthList" class="record-list"></div>
+            </section>
+            <section class="panel">
+              <div class="panel-heading">
+                <h3>Relationship Map</h3>
+                <span id="relationshipCount" class="muted"></span>
+              </div>
+              <div id="relationshipList" class="record-list"></div>
+            </section>
+          </div>
         </section>
 
         <section id="tree" class="view">

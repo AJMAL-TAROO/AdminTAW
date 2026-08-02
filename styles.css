@@ -346,6 +346,102 @@ button.node-row.active {
   gap: 10px;
 }
 
+.relation-stack {
+  display: grid;
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.relation-card {
+  display: grid;
+  gap: 10px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+
+.relation-heading,
+.relation-chip,
+.health-row,
+.inline-editor,
+.chip-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.relation-heading {
+  justify-content: space-between;
+}
+
+.relation-heading h4 {
+  margin: 0;
+  font-size: 0.98rem;
+}
+
+.relation-heading span {
+  color: var(--muted);
+  font-weight: 800;
+}
+
+.inline-editor {
+  align-items: stretch;
+}
+
+.inline-editor select {
+  min-width: 0;
+}
+
+.relation-list {
+  display: grid;
+  gap: 8px;
+}
+
+.relation-chip,
+.health-row {
+  justify-content: space-between;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #fff;
+}
+
+.relation-chip div:first-child,
+.health-row div:first-child {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.relation-chip span,
+.health-row span,
+.health-row small {
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.chip-actions {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.chip-actions button,
+.relation-chip button,
+.health-row button {
+  min-height: 32px;
+  padding: 0 10px;
+  font-size: 0.86rem;
+}
+
+.health-row.warn {
+  border-color: #f0c99b;
+  background: #fff8ef;
+}
+
+.health-row.danger {
+  border-color: #f3b7b0;
+  background: #fff5f4;
+}
+
 .tree-layout {
   display: grid;
   grid-template-columns: minmax(300px, 0.8fr) minmax(420px, 1.2fr);
@@ -474,5 +570,12 @@ dialog::backdrop {
   .attendance-controls,
   .attendance-row {
     grid-template-columns: 1fr;
+  }
+
+  .relation-chip,
+  .health-row,
+  .inline-editor {
+    flex-direction: column;
+    align-items: stretch;
   }
 }

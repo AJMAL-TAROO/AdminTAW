@@ -34,10 +34,17 @@ const els = {
   classroomForm: $("#classroomForm"),
   classroomEditorTitle: $("#classroomEditorTitle"),
   deleteClassroomBtn: $("#deleteClassroomBtn"),
+  personRelations: $("#personRelations"),
+  classroomRelations: $("#classroomRelations"),
   attendanceDate: $("#attendanceDate"),
   attendanceAdmin: $("#attendanceAdmin"),
   attendanceClassroom: $("#attendanceClassroom"),
   attendanceList: $("#attendanceList"),
+  relationshipSearch: $("#relationshipSearch"),
+  healthCount: $("#healthCount"),
+  healthList: $("#healthList"),
+  relationshipCount: $("#relationshipCount"),
+  relationshipList: $("#relationshipList"),
   treeFilter: $("#treeFilter"),
   breadcrumb: $("#breadcrumb"),
   treeChildren: $("#treeChildren"),
@@ -234,6 +241,168 @@ function summaryFor(value) {
   return String(value).slice(0, 100);
 }
 
+function recordLabel(type, key) {
+  if (type === "ADMIN") {
+    const admin = getAtPath(state.data, `ADMIN/${key}`);
+    return admin ? `${key} - ${admin.FULL_NAME || admin.EMAIL || ""}` : key;
+  }
+  if (type === "STUDENTS") {
+    const student = getAtPath(state.data, `STUDENTS/${key}`);
+    return student ? `${key} - ${student.FULL_NAME || student.EMAIL || ""}` : key;
+  }
+  if (type === "CLASSROOMS") {
+    const classroom = getAtPath(state.data, `CLASSROOMS/${key}`);
+    return classroom ? `${classroom.CLASSROOM_ID || key} - ${classroom.TITLE || ""}` : key;
+  }
+  return key;
+}
+
+function classroomKeyById(classroomId) {
+  const id = String(classroomId);
+  return classroomRecords().find(([, classroom]) => String(classroom?.CLASSROOM_ID) === id)?.[0] || "";
+}
+
+function buildRelationshipGraph() {
+  const data = state.data || {};
+  const admins = Object.fromEntries(objectEntries(data.ADMIN));
+  const students = Object.fromEntries(objectEntries(data.STUDENTS));
+  const classrooms = Object.fromEntries(objectEntries(data.CLASSROOMS));
+  const graph = {
+    adminStudents: {},
+    adminClassrooms: {},
+    studentAdmins: {},
+    studentClassrooms: {},
+    classroomAdmins: {},
+    classroomStudents: {},
+    classroomAssets: {},
+    feedbackByStudent: {},
+    feedbackByTutor: {},
+    attendanceByStudent: {},
+    missing: [],
+    unassignedStudents: [],
+    studentsWithoutAdmin: [],
+    classroomsWithoutStudents: [],
+    classroomsWithoutAdmin: [],
+    assetNodesWithoutClassroom: [],
+  };
+
+  for (const [adminKey, admin] of Object.entries(admins)) {
+    graph.adminStudents[adminKey] = csvIds(admin.STUDENTS);
+    graph.adminClassrooms[adminKey] = csvIds(admin.VIRTUAL_ROOMS);
+
+    graph.adminStudents[adminKey].forEach((studentKey) => {
+      if (!students[studentKey]) {
+        graph.missing.push({
+          type: "Missing student",
+          message: `${adminKey} references ${studentKey}, but that student node does not exist.`,
+          path: `ADMIN/${adminKey}/STUDENTS`,
+          severity: "danger",
+        });
+        return;
+      }
+      graph.studentAdmins[studentKey] ||= [];
+      graph.studentAdmins[studentKey].push(adminKey);
+    });
+
+    graph.adminClassrooms[adminKey].forEach((classroomId) => {
+      const classroomKey = classroomKeyById(classroomId);
+      if (!classroomKey) {
+        graph.missing.push({
+          type: "Missing classroom",
+          message: `${adminKey} references classroom ${classroomId}, but that classroom node does not exist.`,
+          path: `ADMIN/${adminKey}/VIRTUAL_ROOMS`,
+          severity: "danger",
+        });
+        return;
+      }
+      graph.classroomAdmins[classroomKey] ||= [];
+      graph.classroomAdmins[classroomKey].push(adminKey);
+    });
+  }
+
+  for (const [studentKey, student] of Object.entries(students)) {
+    graph.studentClassrooms[studentKey] = csvIds(student.VIRTUAL_ROOMS);
+    if (graph.studentClassrooms[studentKey].length === 0) graph.unassignedStudents.push(studentKey);
+    if (!graph.studentAdmins[studentKey]?.length) graph.studentsWithoutAdmin.push(studentKey);
+
+    graph.studentClassrooms[studentKey].forEach((classroomId) => {
+      const classroomKey = classroomKeyById(classroomId);
+      if (!classroomKey) {
+        graph.missing.push({
+          type: "Missing classroom",
+          message: `${studentKey} is assigned to classroom ${classroomId}, but that classroom node does not exist.`,
+          path: `STUDENTS/${studentKey}/VIRTUAL_ROOMS`,
+          severity: "danger",
+        });
+        return;
+      }
+      graph.classroomStudents[classroomKey] ||= [];
+      graph.classroomStudents[classroomKey].push(studentKey);
+    });
+  }
+
+  for (const [classroomKey, classroom] of Object.entries(classrooms)) {
+    const id = String(classroom.CLASSROOM_ID || classroomKey.replace(/\D/g, ""));
+    graph.classroomAssets[classroomKey] = {
+      notesPath: data[`${id}_NOTES`] ? `${id}_NOTES` : "",
+      homeworkPath: data[`${id}_HOMEWORK`] ? `${id}_HOMEWORK` : "",
+      noteCount: countNodeItems(data[`${id}_NOTES`]),
+      homeworkCount: countNodeItems(data[`${id}_HOMEWORK`]),
+    };
+    if (!graph.classroomStudents[classroomKey]?.length) graph.classroomsWithoutStudents.push(classroomKey);
+    if (!graph.classroomAdmins[classroomKey]?.length) graph.classroomsWithoutAdmin.push(classroomKey);
+  }
+
+  for (const [rootKey, value] of objectEntries(data)) {
+    const match = rootKey.match(/^(\d+)_(NOTES|HOMEWORK)$/);
+    if (!match) continue;
+    if (!classroomKeyById(match[1])) {
+      graph.assetNodesWithoutClassroom.push(rootKey);
+    }
+  }
+
+  for (const [feedbackKey, feedback] of objectEntries(data.FEEDBACK)) {
+    if (feedback?.STUDENT_KEY) {
+      graph.feedbackByStudent[feedback.STUDENT_KEY] ||= [];
+      graph.feedbackByStudent[feedback.STUDENT_KEY].push(feedbackKey);
+    }
+    if (feedback?.TUTOR_KEY) {
+      graph.feedbackByTutor[feedback.TUTOR_KEY] ||= [];
+      graph.feedbackByTutor[feedback.TUTOR_KEY].push(feedbackKey);
+    }
+  }
+
+  walk(data.ATTENDANCE || {}, "ATTENDANCE", (path, value) => {
+    const parts = pathParts(path);
+    const last = parts.at(-1);
+    if (!last || !/^STUDENTS_/.test(last) || !isObject(value)) return;
+    graph.attendanceByStudent[last] ||= [];
+    graph.attendanceByStudent[last].push(path);
+  });
+
+  return graph;
+}
+
+function countNodeItems(value) {
+  if (Array.isArray(value)) return value.filter((item) => item != null).length;
+  if (isObject(value)) return Object.keys(value).length;
+  return 0;
+}
+
+function relationButton(label, attrs = {}, variant = "secondary") {
+  const attrText = Object.entries(attrs)
+    .map(([key, value]) => `${key}="${escapeHtml(value)}"`)
+    .join(" ");
+  return `<button class="${variant}" ${attrText} type="button">${escapeHtml(label)}</button>`;
+}
+
+function relationChip(title, meta, actions = "") {
+  return `<div class="relation-chip">
+    <div><strong>${escapeHtml(title)}</strong><span>${escapeHtml(meta || "")}</span></div>
+    <div class="chip-actions">${actions}</div>
+  </div>`;
+}
+
 function setConnection(isLive, message) {
   els.connectionDot.classList.toggle("live", isLive);
   els.connectionText.textContent = message;
@@ -245,6 +414,7 @@ function renderAll() {
   renderPeople();
   renderClassrooms();
   renderAttendanceControls();
+  renderRelationships();
   renderTree();
 }
 
@@ -331,6 +501,7 @@ function nodeType(value) {
 }
 
 els.globalSearch.addEventListener("input", renderGlobalSearch);
+els.relationshipSearch.addEventListener("input", renderRelationships);
 $("#openTreeRoot").addEventListener("click", () => {
   state.treePath = "";
   switchView("tree");
@@ -376,6 +547,85 @@ function walk(value, path, visitor) {
   for (const [key, child] of Object.entries(value)) {
     walk(child, childPath(path, key), visitor);
   }
+}
+
+function renderRelationships() {
+  if (!state.data || !els.healthList) return;
+  const graph = buildRelationshipGraph();
+  const query = els.relationshipSearch.value.trim().toLowerCase();
+  const healthItems = [
+    ...graph.missing,
+    ...graph.unassignedStudents.map((key) => ({
+      type: "Unassigned student",
+      message: `${key} is not assigned to any classroom.`,
+      path: `STUDENTS/${key}`,
+      open: { type: "STUDENTS", key },
+      severity: "warn",
+    })),
+    ...graph.studentsWithoutAdmin.map((key) => ({
+      type: "Student without admin",
+      message: `${key} is not listed inside any admin STUDENTS field.`,
+      path: `STUDENTS/${key}`,
+      open: { type: "STUDENTS", key },
+      severity: "warn",
+    })),
+    ...graph.classroomsWithoutStudents.map((key) => ({
+      type: "Empty classroom",
+      message: `${key} has no assigned students.`,
+      path: `CLASSROOMS/${key}`,
+      openClassroom: key,
+      severity: "warn",
+    })),
+    ...graph.classroomsWithoutAdmin.map((key) => ({
+      type: "Classroom without admin",
+      message: `${key} is not listed in any admin VIRTUAL_ROOMS field.`,
+      path: `CLASSROOMS/${key}`,
+      openClassroom: key,
+      severity: "warn",
+    })),
+    ...graph.assetNodesWithoutClassroom.map((key) => ({
+      type: "Asset node without classroom",
+      message: `/${key} exists, but no matching classroom was found.`,
+      path: key,
+      severity: "warn",
+    })),
+  ].filter((item) => `${item.type} ${item.message} ${item.path}`.toLowerCase().includes(query));
+
+  const relationshipItems = [
+    ...peopleRecords("ADMIN").map(([adminKey, admin]) => ({
+      title: `${adminKey} - ${admin.FULL_NAME || admin.EMAIL || ""}`,
+      meta: `${(graph.adminStudents[adminKey] || []).length} students, ${(graph.adminClassrooms[adminKey] || []).length} classrooms`,
+      action: relationButton("Open", { "data-open-person-type": "ADMIN", "data-open-person-key": adminKey }),
+    })),
+    ...classroomRecords().map(([classroomKey, classroom]) => ({
+      title: `${classroom.CLASSROOM_ID || classroomKey} - ${classroom.TITLE || ""}`,
+      meta: `${(graph.classroomStudents[classroomKey] || []).length} students, ${(graph.classroomAdmins[classroomKey] || []).length} admins`,
+      action: relationButton("Open", { "data-open-classroom-key": classroomKey }),
+    })),
+    ...peopleRecords("STUDENTS").map(([studentKey, student]) => ({
+      title: `${studentKey} - ${student.FULL_NAME || student.EMAIL || ""}`,
+      meta: `${(graph.studentClassrooms[studentKey] || []).length} classrooms, ${(graph.studentAdmins[studentKey] || []).length} admins`,
+      action: relationButton("Open", { "data-open-person-type": "STUDENTS", "data-open-person-key": studentKey }),
+    })),
+  ].filter((item) => `${item.title} ${item.meta}`.toLowerCase().includes(query));
+
+  els.healthCount.textContent = `${healthItems.length} items`;
+  els.relationshipCount.textContent = `${relationshipItems.length} links`;
+  els.healthList.innerHTML = healthItems.map((item) => {
+    const actions = item.open
+      ? relationButton("Open", { "data-open-person-type": item.open.type, "data-open-person-key": item.open.key })
+      : item.openClassroom
+        ? relationButton("Open", { "data-open-classroom-key": item.openClassroom })
+        : relationButton("Open Path", { "data-open-tree-path": item.path });
+    return `<div class="health-row ${escapeHtml(item.severity || "warn")}">
+      <div><strong>${escapeHtml(item.type)}</strong><span>${escapeHtml(item.message)}</span><small>/${escapeHtml(item.path)}</small></div>
+      <div class="chip-actions">${actions}</div>
+    </div>`;
+  }).join("") || `<div class="muted">No relationship issues found for this filter.</div>`;
+
+  els.relationshipList.innerHTML = relationshipItems.map((item) => {
+    return relationChip(item.title, item.meta, item.action);
+  }).join("") || `<div class="muted">No relationship records match this filter.</div>`;
 }
 
 $$("[data-people-type]").forEach((button) => {
@@ -460,6 +710,7 @@ function renderPersonForm() {
     els.personEditorTitle.textContent = "Select a record";
     els.deletePersonBtn.classList.add("hidden");
     els.personForm.innerHTML = `<div class="muted wide">Choose an admin or student to edit.</div>`;
+    els.personRelations.innerHTML = "";
     return;
   }
 
@@ -467,6 +718,7 @@ function renderPersonForm() {
   els.deletePersonBtn.classList.remove("hidden");
   els.personForm.innerHTML = buildFormFields(record, personFields[type], "person");
   els.personForm.onsubmit = savePersonForm;
+  renderPersonRelations();
 }
 
 async function savePersonForm(event) {
@@ -483,6 +735,81 @@ async function deleteSelectedPerson() {
   await dbRemove(`${state.peopleType}/${key}`);
   state.selectedPersonKey = "";
   showAlert(`${key} deleted.`);
+}
+
+function renderPersonRelations() {
+  const key = state.selectedPersonKey;
+  const type = state.peopleType;
+  if (!key || !els.personRelations) {
+    return;
+  }
+  const graph = buildRelationshipGraph();
+
+  if (type === "ADMIN") {
+    const studentIds = graph.adminStudents[key] || [];
+    const classroomIds = graph.adminClassrooms[key] || [];
+    const unlinkedStudents = peopleRecords("STUDENTS").filter(([studentKey]) => !studentIds.includes(studentKey));
+    const unlinkedClassrooms = classroomRecords().filter(([, classroom]) => !classroomIds.includes(String(classroom.CLASSROOM_ID)));
+
+    els.personRelations.innerHTML = `
+      <section class="relation-card">
+        <div class="relation-heading"><h4>Students managed by this admin</h4><span>${studentIds.length}</span></div>
+        <div class="inline-editor">
+          <select id="adminStudentSelect">${unlinkedStudents.map(([studentKey]) => `<option value="${escapeHtml(studentKey)}">${escapeHtml(recordLabel("STUDENTS", studentKey))}</option>`).join("")}</select>
+          ${relationButton("Link Student", { "data-link-admin-student": key })}
+        </div>
+        <div class="relation-list">${studentIds.map((studentKey) => {
+          const student = getAtPath(state.data, `STUDENTS/${studentKey}`);
+          const actions = `${relationButton("Open", { "data-open-person-type": "STUDENTS", "data-open-person-key": studentKey })}${relationButton("Remove", { "data-unlink-admin-student": key, "data-student-key": studentKey }, "danger ghost")}`;
+          return relationChip(studentKey, student ? student.FULL_NAME || student.EMAIL || "" : "Missing student node", actions);
+        }).join("") || `<div class="muted">No student IDs linked.</div>`}</div>
+      </section>
+      <section class="relation-card">
+        <div class="relation-heading"><h4>Classrooms managed by this admin</h4><span>${classroomIds.length}</span></div>
+        <div class="inline-editor">
+          <select id="adminClassroomSelect">${unlinkedClassrooms.map(([classroomKey, classroom]) => `<option value="${escapeHtml(String(classroom.CLASSROOM_ID))}">${escapeHtml(recordLabel("CLASSROOMS", classroomKey))}</option>`).join("")}</select>
+          ${relationButton("Link Classroom", { "data-link-admin-classroom": key })}
+        </div>
+        <div class="relation-list">${classroomIds.map((classroomId) => {
+          const classroomKey = classroomKeyById(classroomId);
+          const actions = classroomKey
+            ? `${relationButton("Open", { "data-open-classroom-key": classroomKey })}${relationButton("Remove", { "data-unlink-admin-classroom": key, "data-classroom-id": classroomId }, "danger ghost")}`
+            : relationButton("Open Field", { "data-open-tree-path": `ADMIN/${key}/VIRTUAL_ROOMS` });
+          return relationChip(`Classroom ${classroomId}`, classroomKey ? recordLabel("CLASSROOMS", classroomKey) : "Missing classroom node", actions);
+        }).join("") || `<div class="muted">No classroom IDs linked.</div>`}</div>
+      </section>
+    `;
+    return;
+  }
+
+  const classroomIds = graph.studentClassrooms[key] || [];
+  const adminIds = graph.studentAdmins[key] || [];
+  const availableClassrooms = classroomRecords().filter(([, classroom]) => !classroomIds.includes(String(classroom.CLASSROOM_ID)));
+  els.personRelations.innerHTML = `
+    <section class="relation-card">
+      <div class="relation-heading"><h4>Classrooms assigned to this student</h4><span>${classroomIds.length}</span></div>
+      <div class="inline-editor">
+        <select id="studentClassroomSelect">${availableClassrooms.map(([classroomKey, classroom]) => `<option value="${escapeHtml(String(classroom.CLASSROOM_ID))}">${escapeHtml(recordLabel("CLASSROOMS", classroomKey))}</option>`).join("")}</select>
+        ${relationButton("Assign Classroom", { "data-link-student-classroom": key })}
+      </div>
+      <div class="relation-list">${classroomIds.map((classroomId) => {
+        const classroomKey = classroomKeyById(classroomId);
+        const actions = classroomKey
+          ? `${relationButton("Open", { "data-open-classroom-key": classroomKey })}${relationButton("Remove", { "data-unlink-student-classroom": key, "data-classroom-id": classroomId }, "danger ghost")}`
+          : relationButton("Open Field", { "data-open-tree-path": `STUDENTS/${key}/VIRTUAL_ROOMS` });
+        return relationChip(`Classroom ${classroomId}`, classroomKey ? recordLabel("CLASSROOMS", classroomKey) : "Missing classroom node", actions);
+      }).join("") || `<div class="muted">No classrooms assigned.</div>`}</div>
+    </section>
+    <section class="relation-card">
+      <div class="relation-heading"><h4>Admins referencing this student</h4><span>${adminIds.length}</span></div>
+      <div class="relation-list">${adminIds.map((adminKey) => {
+        const actions = `${relationButton("Open", { "data-open-person-type": "ADMIN", "data-open-person-key": adminKey })}${relationButton("Remove", { "data-unlink-admin-student": adminKey, "data-student-key": key }, "danger ghost")}`;
+        return relationChip(adminKey, recordLabel("ADMIN", adminKey), actions);
+      }).join("") || `<div class="muted">No admin currently references this student.</div>`}</div>
+    </section>
+    ${relatedNodeSection("Feedback", graph.feedbackByStudent[key] || [], "FEEDBACK")}
+    ${relatedNodeSection("Attendance records", graph.attendanceByStudent[key] || [])}
+  `;
 }
 
 els.classroomSearch.addEventListener("input", renderClassrooms);
@@ -557,6 +884,7 @@ function renderClassroomForm() {
     els.classroomEditorTitle.textContent = "Select a classroom";
     els.deleteClassroomBtn.classList.add("hidden");
     els.classroomForm.innerHTML = `<div class="muted wide">Choose a classroom to edit.</div>`;
+    els.classroomRelations.innerHTML = "";
     return;
   }
 
@@ -564,6 +892,7 @@ function renderClassroomForm() {
   els.deleteClassroomBtn.classList.remove("hidden");
   els.classroomForm.innerHTML = buildFormFields(record, classroomFields, "classroom");
   els.classroomForm.onsubmit = saveClassroomForm;
+  renderClassroomRelations();
 }
 
 async function saveClassroomForm(event) {
@@ -589,6 +918,70 @@ async function deleteSelectedClassroom() {
   showAlert(`${key} deleted.`);
 }
 
+function renderClassroomRelations() {
+  const key = state.selectedClassroomKey;
+  const classroom = getAtPath(state.data, `CLASSROOMS/${key}`);
+  if (!key || !classroom || !els.classroomRelations) return;
+
+  const graph = buildRelationshipGraph();
+  const classroomId = String(classroom.CLASSROOM_ID || "");
+  const studentIds = graph.classroomStudents[key] || [];
+  const adminIds = graph.classroomAdmins[key] || [];
+  const assets = graph.classroomAssets[key] || {};
+  const availableStudents = peopleRecords("STUDENTS").filter(([studentKey]) => !studentIds.includes(studentKey));
+  const attendancePaths = [];
+  walk((state.data || {}).ATTENDANCE || {}, "ATTENDANCE", (path, value) => {
+    if (path.includes(`/CLASSROOM_${classroomId}`) && isObject(value)) attendancePaths.push(path);
+  });
+
+  els.classroomRelations.innerHTML = `
+    <section class="relation-card">
+      <div class="relation-heading"><h4>Students in this classroom</h4><span>${studentIds.length}</span></div>
+      <div class="inline-editor">
+        <select id="classroomStudentSelect">${availableStudents.map(([studentKey]) => `<option value="${escapeHtml(studentKey)}">${escapeHtml(recordLabel("STUDENTS", studentKey))}</option>`).join("")}</select>
+        ${relationButton("Assign Student", { "data-link-classroom-student": key })}
+      </div>
+      <div class="relation-list">${studentIds.map((studentKey) => {
+        const actions = `${relationButton("Open", { "data-open-person-type": "STUDENTS", "data-open-person-key": studentKey })}${relationButton("Remove", { "data-unlink-student-classroom": studentKey, "data-classroom-id": classroomId }, "danger ghost")}`;
+        return relationChip(studentKey, recordLabel("STUDENTS", studentKey), actions);
+      }).join("") || `<div class="muted">No students are assigned to this classroom.</div>`}</div>
+    </section>
+    <section class="relation-card">
+      <div class="relation-heading"><h4>Admins managing this classroom</h4><span>${adminIds.length}</span></div>
+      <div class="relation-list">${adminIds.map((adminKey) => {
+        const actions = `${relationButton("Open", { "data-open-person-type": "ADMIN", "data-open-person-key": adminKey })}${relationButton("Remove", { "data-unlink-admin-classroom": adminKey, "data-classroom-id": classroomId }, "danger ghost")}`;
+        return relationChip(adminKey, recordLabel("ADMIN", adminKey), actions);
+      }).join("") || `<div class="muted">No admin has this classroom in VIRTUAL_ROOMS.</div>`}</div>
+    </section>
+    <section class="relation-card">
+      <div class="relation-heading"><h4>Notes and homework nodes</h4><span>${(assets.noteCount || 0) + (assets.homeworkCount || 0)}</span></div>
+      <div class="relation-list">
+        ${assetChip("Notes", assets.notesPath, assets.noteCount, `${classroomId}_NOTES`)}
+        ${assetChip("Homework", assets.homeworkPath, assets.homeworkCount, `${classroomId}_HOMEWORK`)}
+      </div>
+    </section>
+    ${relatedNodeSection("Attendance paths", attendancePaths)}
+  `;
+}
+
+function assetChip(label, path, count, defaultPath) {
+  const targetPath = path || defaultPath;
+  const actions = path
+    ? relationButton("Open", { "data-open-tree-path": targetPath })
+    : relationButton("Create", { "data-create-empty-node": targetPath });
+  return relationChip(label, path ? `${count || 0} records at /${path}` : `Missing /${defaultPath}`, actions);
+}
+
+function relatedNodeSection(title, paths, rootPrefix = "") {
+  return `<section class="relation-card">
+    <div class="relation-heading"><h4>${escapeHtml(title)}</h4><span>${paths.length}</span></div>
+    <div class="relation-list">${paths.slice(0, 40).map((path) => {
+      const fullPath = rootPrefix ? `${rootPrefix}/${path}` : path;
+      return relationChip(fullPath, summaryFor(getAtPath(state.data, fullPath)), relationButton("Open", { "data-open-tree-path": fullPath }));
+    }).join("") || `<div class="muted">No related nodes found.</div>`}</div>
+  </section>`;
+}
+
 function buildFormFields(record, preferredFields, namespace) {
   const allFields = [...new Set([...preferredFields, ...Object.keys(record || {})])];
   const fields = allFields.map((field) => {
@@ -603,8 +996,76 @@ function buildFormFields(record, preferredFields, namespace) {
   return `${fields}<div class="form-actions"><button class="secondary" type="button" data-open-json>Open in Tree</button><button type="submit">Save Changes</button></div>`;
 }
 
-document.addEventListener("click", (event) => {
-  if (!event.target.matches("[data-open-json]")) return;
+document.addEventListener("click", async (event) => {
+  const button = event.target.closest("button");
+  if (!button) return;
+
+  if (button.dataset.openPersonKey) {
+    openPerson(button.dataset.openPersonType, button.dataset.openPersonKey);
+    return;
+  }
+
+  if (button.dataset.openClassroomKey) {
+    openClassroom(button.dataset.openClassroomKey);
+    return;
+  }
+
+  if (button.dataset.openTreePath !== undefined) {
+    openTreePath(button.dataset.openTreePath);
+    return;
+  }
+
+  if (button.dataset.createEmptyNode) {
+    await dbSet(button.dataset.createEmptyNode, {});
+    await loadDatabase({ silent: true });
+    openTreePath(button.dataset.createEmptyNode);
+    showAlert(`/${button.dataset.createEmptyNode} created.`);
+    return;
+  }
+
+  if (button.dataset.linkAdminStudent) {
+    const studentKey = $("#adminStudentSelect")?.value;
+    if (studentKey) await addCsvRelation(`ADMIN/${button.dataset.linkAdminStudent}/STUDENTS`, studentKey, "Student linked.");
+    return;
+  }
+
+  if (button.dataset.unlinkAdminStudent) {
+    await removeCsvRelation(`ADMIN/${button.dataset.unlinkAdminStudent}/STUDENTS`, button.dataset.studentKey, "Student link removed.");
+    return;
+  }
+
+  if (button.dataset.linkAdminClassroom) {
+    const classroomId = $("#adminClassroomSelect")?.value;
+    if (classroomId) await addCsvRelation(`ADMIN/${button.dataset.linkAdminClassroom}/VIRTUAL_ROOMS`, classroomId, "Classroom linked.");
+    return;
+  }
+
+  if (button.dataset.unlinkAdminClassroom) {
+    await removeCsvRelation(`ADMIN/${button.dataset.unlinkAdminClassroom}/VIRTUAL_ROOMS`, button.dataset.classroomId, "Classroom link removed.");
+    return;
+  }
+
+  if (button.dataset.linkStudentClassroom) {
+    const classroomId = $("#studentClassroomSelect")?.value;
+    if (classroomId) await addCsvRelation(`STUDENTS/${button.dataset.linkStudentClassroom}/VIRTUAL_ROOMS`, classroomId, "Classroom assigned.");
+    return;
+  }
+
+  if (button.dataset.linkClassroomStudent) {
+    const studentKey = $("#classroomStudentSelect")?.value;
+    const classroom = getAtPath(state.data, `CLASSROOMS/${button.dataset.linkClassroomStudent}`);
+    if (studentKey && classroom?.CLASSROOM_ID) {
+      await addCsvRelation(`STUDENTS/${studentKey}/VIRTUAL_ROOMS`, String(classroom.CLASSROOM_ID), "Student assigned.");
+    }
+    return;
+  }
+
+  if (button.dataset.unlinkStudentClassroom) {
+    await removeCsvRelation(`STUDENTS/${button.dataset.unlinkStudentClassroom}/VIRTUAL_ROOMS`, button.dataset.classroomId, "Classroom assignment removed.");
+    return;
+  }
+
+  if (!button.matches("[data-open-json]")) return;
   if (state.view === "people" && state.selectedPersonKey) {
     state.treePath = `${state.peopleType}/${state.selectedPersonKey}`;
   }
@@ -614,6 +1075,41 @@ document.addEventListener("click", (event) => {
   switchView("tree");
   renderTree();
 });
+
+function openPerson(type, key) {
+  state.peopleType = type;
+  state.selectedPersonKey = key;
+  $$(".tab").forEach((tab) => tab.classList.toggle("active", tab.dataset.peopleType === state.peopleType));
+  switchView("people");
+  renderPeople();
+}
+
+function openClassroom(key) {
+  state.selectedClassroomKey = key;
+  switchView("classrooms");
+  renderClassrooms();
+}
+
+function openTreePath(path) {
+  state.treePath = cleanPath(path);
+  switchView("tree");
+  renderTree();
+}
+
+async function addCsvRelation(path, value, message) {
+  const current = csvIds(getAtPath(state.data, path));
+  if (!current.includes(value)) current.push(value);
+  await dbSet(path, current.join(","));
+  await loadDatabase({ silent: true });
+  showAlert(message);
+}
+
+async function removeCsvRelation(path, value, message) {
+  const current = csvIds(getAtPath(state.data, path)).filter((item) => item !== value);
+  await dbSet(path, current.join(","));
+  await loadDatabase({ silent: true });
+  showAlert(message);
+}
 
 function formPayload(form) {
   const payload = {};
