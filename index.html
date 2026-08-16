@@ -24,6 +24,7 @@
         <button class="nav-item active" data-view="overview" type="button">Overview</button>
         <button class="nav-item" data-view="people" type="button">People</button>
         <button class="nav-item" data-view="classrooms" type="button">Classrooms</button>
+        <button class="nav-item" data-view="marketing" type="button">Marketing</button>
         <button class="nav-item" data-view="attendance" type="button">Attendance</button>
         <button class="nav-item" data-view="relationships" type="button">Relationships</button>
         <button class="nav-item" data-view="tree" type="button">Live Tree CRUD</button>
@@ -116,6 +117,32 @@
               </div>
               <form id="classroomForm" class="form-grid"></form>
               <div id="classroomRelations" class="relation-stack"></div>
+            </section>
+          </div>
+        </section>
+
+        <section id="marketing" class="view">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">Advertising proof</p>
+              <h2>Marketing</h2>
+            </div>
+            <button id="newMarketingBtn" type="button">New Campaign</button>
+          </div>
+          <div class="split">
+            <section class="panel">
+              <div class="panel-heading">
+                <h3>Teacher Campaigns</h3>
+                <select id="marketingAdmin"></select>
+              </div>
+              <div id="marketingList" class="record-list"></div>
+            </section>
+            <section class="panel editor-panel">
+              <div class="panel-heading">
+                <h3 id="marketingEditorTitle">Select a campaign</h3>
+                <button id="deleteMarketingBtn" class="danger ghost hidden" type="button">Delete</button>
+              </div>
+              <form id="marketingForm" class="form-grid"></form>
             </section>
           </div>
         </section>

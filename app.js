@@ -9,6 +9,8 @@ const state = {
   peopleType: "ADMIN",
   selectedPersonKey: "",
   selectedClassroomKey: "",
+  selectedMarketingAdminKey: "",
+  selectedMarketingKey: "",
   treePath: "",
   attendanceRecords: {},
 };
@@ -34,6 +36,11 @@ const els = {
   classroomForm: $("#classroomForm"),
   classroomEditorTitle: $("#classroomEditorTitle"),
   deleteClassroomBtn: $("#deleteClassroomBtn"),
+  marketingAdmin: $("#marketingAdmin"),
+  marketingList: $("#marketingList"),
+  marketingForm: $("#marketingForm"),
+  marketingEditorTitle: $("#marketingEditorTitle"),
+  deleteMarketingBtn: $("#deleteMarketingBtn"),
   personRelations: $("#personRelations"),
   classroomRelations: $("#classroomRelations"),
   attendanceDate: $("#attendanceDate"),
@@ -413,6 +420,7 @@ function renderAll() {
   renderOverview();
   renderPeople();
   renderClassrooms();
+  renderMarketing();
   renderAttendanceControls();
   renderRelationships();
   renderTree();
@@ -844,6 +852,147 @@ function renderClassrooms() {
   });
 
   renderClassroomForm();
+}
+
+els.marketingAdmin.addEventListener("change", () => {
+  state.selectedMarketingAdminKey = els.marketingAdmin.value;
+  state.selectedMarketingKey = "";
+  renderMarketing();
+});
+$("#newMarketingBtn").addEventListener("click", createMarketingCampaign);
+els.deleteMarketingBtn.addEventListener("click", deleteSelectedMarketingCampaign);
+
+function marketingCampaignRecords(adminKey = state.selectedMarketingAdminKey) {
+  const campaigns = getAtPath(state.data, `ADMIN/${adminKey}/MARKETING`);
+  return objectEntries(campaigns).sort(([a, av], [b, bv]) => {
+    const left = av?.SCHEDULE_START || av?.CAMPAIGN_NAME || a;
+    const right = bv?.SCHEDULE_START || bv?.CAMPAIGN_NAME || b;
+    return String(right).localeCompare(String(left), undefined, { numeric: true });
+  });
+}
+
+function renderMarketing() {
+  if (!state.data || !els.marketingAdmin) return;
+  const admins = peopleRecords("ADMIN");
+  if (!state.selectedMarketingAdminKey && admins.length) {
+    state.selectedMarketingAdminKey = admins[0][0];
+  }
+
+  const previousAdmin = state.selectedMarketingAdminKey;
+  els.marketingAdmin.innerHTML = admins.map(([key, admin]) => {
+    return `<option value="${escapeHtml(key)}">${escapeHtml(`${key} - ${admin.FULL_NAME || admin.EMAIL || ""}`)}</option>`;
+  }).join("");
+  if (previousAdmin) els.marketingAdmin.value = previousAdmin;
+
+  const campaigns = marketingCampaignRecords();
+  els.marketingList.innerHTML = campaigns.map(([key, campaign]) => {
+    return `<button class="record ${key === state.selectedMarketingKey ? "active" : ""}" data-marketing-key="${escapeHtml(key)}" type="button">
+      <span class="row-title"><span>${escapeHtml(campaign.CAMPAIGN_NAME || key)}</span><span>${escapeHtml(campaign.STATUS || "Unknown")}</span></span>
+      <span class="row-meta">${escapeHtml(marketingCampaignSummary(campaign))}</span>
+    </button>`;
+  }).join("") || `<div class="muted">No marketing campaigns have been added for this teacher.</div>`;
+
+  $$("[data-marketing-key]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.selectedMarketingKey = button.dataset.marketingKey;
+      renderMarketing();
+    });
+  });
+
+  renderMarketingForm();
+}
+
+function marketingCampaignSummary(campaign = {}) {
+  const schedule = campaign.SCHEDULE_START && campaign.SCHEDULE_END
+    ? `${campaign.SCHEDULE_START} to ${campaign.SCHEDULE_END}`
+    : "Schedule not set";
+  const packageName = campaign.SELECTED_PACKAGE || "package not set";
+  return `${schedule} - ${packageName}`;
+}
+
+async function createMarketingCampaign() {
+  const adminKey = state.selectedMarketingAdminKey || els.marketingAdmin.value;
+  if (!adminKey) return showAlert("Choose a teacher before creating a campaign.", "error");
+  const key = nextMarketingCampaignKey(adminKey);
+  const payload = {
+    CAMPAIGN_NAME: "",
+    STATUS: "Draft",
+    SCHEDULE_START: "",
+    SCHEDULE_END: "",
+    MESSAGING_CONVERSATIONS_STARTED: 0,
+    REACH: 0,
+    IMPRESSIONS: 0,
+    SELECTED_PACKAGE: "launch",
+    AMOUNT_SPENT_MUR: 0,
+    STUDENTS_ACQUIRED: 0,
+  };
+  await dbSet(`ADMIN/${adminKey}/MARKETING/${key}`, payload);
+  state.selectedMarketingKey = key;
+  await loadDatabase({ silent: true });
+  showAlert(`${key} created for ${adminKey}.`);
+  switchView("marketing");
+}
+
+function nextMarketingCampaignKey(adminKey) {
+  const campaigns = marketingCampaignRecords(adminKey);
+  const highest = campaigns.reduce((max, [key]) => {
+    const match = key.match(/^MARKETING_(\d+)$/);
+    return match ? Math.max(max, Number(match[1])) : max;
+  }, 0);
+  return `MARKETING_${highest + 1}`;
+}
+
+function renderMarketingForm() {
+  const adminKey = state.selectedMarketingAdminKey;
+  const key = state.selectedMarketingKey;
+  const campaign = getAtPath(state.data, `ADMIN/${adminKey}/MARKETING/${key}`);
+  if (!adminKey || !key || !campaign) {
+    els.marketingEditorTitle.textContent = "Select a campaign";
+    els.deleteMarketingBtn.classList.add("hidden");
+    els.marketingForm.innerHTML = `<div class="muted wide">Choose a campaign or create a new one.</div>`;
+    return;
+  }
+
+  els.marketingEditorTitle.textContent = `${key} - ${campaign.CAMPAIGN_NAME || "Untitled campaign"}`;
+  els.deleteMarketingBtn.classList.remove("hidden");
+  els.marketingForm.innerHTML = `
+    <label class="wide">Campaign name<input name="CAMPAIGN_NAME" value="${escapeHtml(campaign.CAMPAIGN_NAME || "")}" required></label>
+    <label>Status<select name="STATUS">${["Draft", "In progress", "Active", "Paused", "Completed", "Cancelled"].map((status) => `<option value="${status}" ${campaign.STATUS === status ? "selected" : ""}>${status}</option>`).join("")}</select></label>
+    <label>Selected package<select name="SELECTED_PACKAGE">${[
+      ["launch", "Launch"],
+      ["growth", "Growth"],
+      ["premium", "Premium"],
+    ].map(([value, label]) => `<option value="${value}" ${campaign.SELECTED_PACKAGE === value ? "selected" : ""}>${label}</option>`).join("")}</select></label>
+    <label>Schedule start<input name="SCHEDULE_START" type="date" value="${escapeHtml(campaign.SCHEDULE_START || "")}"></label>
+    <label>Schedule end<input name="SCHEDULE_END" type="date" value="${escapeHtml(campaign.SCHEDULE_END || "")}"></label>
+    <label>Messaging conversations started<input name="MESSAGING_CONVERSATIONS_STARTED" type="number" min="0" step="1" value="${escapeHtml(campaign.MESSAGING_CONVERSATIONS_STARTED ?? 0)}"></label>
+    <label>Reach<input name="REACH" type="number" min="0" step="1" value="${escapeHtml(campaign.REACH ?? 0)}"></label>
+    <label>Impressions<input name="IMPRESSIONS" type="number" min="0" step="1" value="${escapeHtml(campaign.IMPRESSIONS ?? 0)}"></label>
+    <label>Money spent (MUR)<input name="AMOUNT_SPENT_MUR" type="number" min="0" step="1" value="${escapeHtml(campaign.AMOUNT_SPENT_MUR ?? 0)}"></label>
+    <label>Students gotten through ads<input name="STUDENTS_ACQUIRED" type="number" min="0" step="1" value="${escapeHtml(campaign.STUDENTS_ACQUIRED ?? 0)}"></label>
+    <div class="form-actions"><button class="secondary" type="button" data-open-tree-path="ADMIN/${escapeHtml(adminKey)}/MARKETING/${escapeHtml(key)}">Open in Tree</button><button type="submit">Save Campaign</button></div>
+  `;
+  els.marketingForm.onsubmit = saveMarketingCampaign;
+}
+
+async function saveMarketingCampaign(event) {
+  event.preventDefault();
+  const adminKey = state.selectedMarketingAdminKey;
+  const key = state.selectedMarketingKey;
+  const payload = formPayload(els.marketingForm);
+  await dbUpdate(`ADMIN/${adminKey}/MARKETING/${key}`, payload);
+  await loadDatabase({ silent: true });
+  showAlert(`${key} updated.`);
+}
+
+async function deleteSelectedMarketingCampaign() {
+  const adminKey = state.selectedMarketingAdminKey;
+  const key = state.selectedMarketingKey;
+  if (!adminKey || !key || !confirm(`Delete ${key} from ${adminKey}?`)) return;
+  await dbRemove(`ADMIN/${adminKey}/MARKETING/${key}`);
+  state.selectedMarketingKey = "";
+  await loadDatabase({ silent: true });
+  showAlert(`${key} deleted.`);
 }
 
 async function createNewClassroom() {
